@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>選股策略 - 交易系統</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+TC:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📋 選股策略（台股）</h1>
+            <nav class="main-nav">
+                <a href="/" class="nav-link">📊 看盤</a>
+                <a href="/selecting" class="nav-link active">📋 選股</a>
+            </nav>
+        </header>
+
+        <section class="market-section selecting-page-section">
+            <div class="section-header">
+                <h2>策略1：毛利率 · 營收成長 · 5MA&gt;20MA</h2>
+                <div class="section-controls">
+                    <span class="update-time" id="stock-screener-update-time">-</span>
+                    <button class="btn-refresh-small" onclick="runStockScreener()" title="執行選股">🔄 執行</button>
+                </div>
+            </div>
+            <p class="volume-desc">條件：連續 3 季毛利率 &gt; 30% 且每季持續成長；<strong>近三月營收年增每個月都要 &gt; 20%</strong>；日K線 5MA &gt; 20MA。篩選標的：<strong>科技股</strong>（排除金融、傳產）。約需 5–10 分鐘（4 執行緒，含重試）。</p>
+            <div id="stock-screener-results" class="selecting-results">
+                <div class="loading">按「執行」開始篩選</div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+    async function runStockScreener() {
+        var btn = document.querySelector('.selecting-page-section button');
+        var container = document.getElementById('stock-screener-results');
+        var timeEl = document.getElementById('stock-screener-update-time');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '執行中...';
+        }
+        if (container) container.innerHTML = '<div class="loading">策略1 篩選中（約 5–10 分鐘，4 執行緒）...</div>';
+        try {
+            var res = await fetch('/api/stock-screener');
+            var result = await res.json();
+            if (result.success && result.data) {
+                var d = result.data;
+                var warnHtml = (d.warnings && d.warnings.length > 0)
+                    ? '<div class="error" style="margin-bottom:12px;">' +
+                        d.warnings.map(function(w) { return '⚠ ' + w; }).join('<br>') + '</div>'
+                    : '';
+                var contentHtml = '';
+                if (d.results && d.results.length > 0) {
+                    contentHtml = '<div class="stock-screener-list">';
+                    d.results.forEach(function(r) {
+                        var margins = (r.gross_margin_quarters || []).join('% → ');
+                        if (margins) margins += '%';
+                        var yoyStr = (r.revenue_yoy_months && r.revenue_yoy_months.length === 3)
+                            ? r.revenue_yoy_months.map(function(x) { return x + '%'; }).join(' / ')
+                            : ((r.revenue_yoy_pct != null) ? (r.revenue_yoy_pct + '%') : '-');
+                        contentHtml += '<div class="stock-screener-item market-card">' +
+                            '<div class="market-card-name">' + (r.name || r.stock_id) + '</div>' +
+                            '<div class="market-card-symbol">' + r.stock_id + '</div>' +
+                            '<div class="detail-item"><span>近3季毛利率：</span><span>' + (margins || '-') + '</span></div>' +
+                            '<div class="detail-item"><span>近三月營收年增：</span><span>' + yoyStr + '</span></div>' +
+                            '<div class="detail-item"><span>5MA&gt;20MA：</span><span>✓</span></div>' +
+                            '</div>';
+                    });
+                    contentHtml += '</div>';
+                } else {
+                    contentHtml = '<div class="volume-desc">' +
+                        (warnHtml ? '因上述原因無法取得資料，故無篩選結果。' : '無符合條件的標的。可調整條件或稍後重試。') +
+                        '</div>';
+                }
+                container.innerHTML = warnHtml + contentHtml;
+                if (d.timestamp && timeEl) {
+                    var dt = new Date(d.timestamp);
+                    timeEl.textContent = '更新: ' + dt.toLocaleString('zh-TW');
+                }
+            } else {
+                container.innerHTML = '<div class="error">' + (result.error || '載入失敗') + '</div>';
+            }
+        } catch (e) {
+            if (container) container.innerHTML = '<div class="error">' + (e.message || '請求失敗') + '</div>';
+        }
+        if (btn) {
+            btn.textContent = '✓ 完成';
+            setTimeout(function() { btn.textContent = '🔄 執行'; btn.disabled = false; }, 2000);
+        }
+    }
+    </script>
+</body>
+</html>

@@ -1,0 +1,682 @@
+"""
+法人說明會數據獲取模組
+從本地CSV文件讀取法說會資料（用戶需手動下載）
+"""
+import csv
+import os
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+import time
+import pytz
+from pathlib import Path
+
+class IRFetcher:
+    """法人說明會數據獲取器（從本地CSV文件）"""
+    
+    def __init__(self, csv_dir: str = None):
+        """
+        初始化
+        
+        Args:
+            csv_dir: CSV文件目錄路徑，默認為項目根目錄下的 'ir_csv' 文件夾
+        """
+        self.cache = {}
+        self.cache_time = {}
+        self.cache_duration = 3600  # 緩存1小時
+        self.taiwan_tz = pytz.timezone('Asia/Taipei')
+        
+        # 設置CSV文件目錄
+        if csv_dir:
+            self.csv_dir = Path(csv_dir)
+        else:
+            # 默認使用項目根目錄下的 ir_csv 文件夾
+            project_root = Path(__file__).parent.parent
+            self.csv_dir = project_root / 'ir_csv'
+        
+        # 確保目錄存在
+        self.csv_dir.mkdir(exist_ok=True)
+        
+    def _is_cache_valid(self, key: str) -> bool:
+        """檢查緩存是否有效"""
+        if key not in self.cache_time:
+            return False
+        elapsed = time.time() - self.cache_time[key]
+        return elapsed < self.cache_duration
+    
+    def _parse_ir_date(self, date_str: str, roc_year: int) -> Optional[datetime]:
+        """解析法說會日期（可能是民國年格式）"""
+        if not date_str or date_str.strip() == '':
+            return None
+        
+        date_str = date_str.strip()
+        
+        # 處理日期範圍（例如: 115/01/13 至 115/01/20）
+        if '至' in date_str or '~' in date_str or ' ' in date_str:
+            # 取第一個日期
+            date_str = date_str.split('至')[0].split('~')[0].split(' ')[0].strip()
+        
+        # 處理民國年格式 (例如: 115/01/28)
+        if '/' in date_str and len(date_str.split('/')) == 3:
+            parts = date_str.split('/')
+            try:
+                year_part = int(parts[0])
+                month_part = int(parts[1])
+                day_part = int(parts[2])
+                
+                # 判斷是否為民國年
+                # 民國年通常在 100-200 之間（對應 2011-2111 年）
+                # 如果年份在 100-200 之間，視為民國年
+                if 100 <= year_part <= 200:
+                    # 民國年轉西元年：民國年 + 1911 = 西元年
+                    year = year_part + 1911
+                elif year_part < 100:
+                    # 小於100也可能是民國年（例如：99年 = 2010年）
+                    year = year_part + 1911
+                else:
+                    # 大於200，視為西元年
+                    year = year_part
+                
+                dt = datetime(year, month_part, day_part)
+                return self.taiwan_tz.localize(dt)
+            except:
+                pass
+        
+        return None
+    
+    def _find_csv_file(self, year: int, month: int, market: str = 'sii') -> Optional[Path]:
+        """
+        查找對應的CSV文件
+        
+        Args:
+            year: 民國年（例如115表示2026年）
+            month: 月份
+            market: 市場別（'sii'=上市, 'otc'=上櫃）
+            
+        Returns:
+            CSV文件路徑，如果不存在則返回None
+        """
+        # 轉換為西元年
+        gregorian_year = year + 1911
+        
+        # 優先查找按月份命名的文件（例如：1月.csv, 2月.csv）
+        month_names = {
+            1: '1月', 2: '2月', 3: '3月', 4: '4月', 5: '5月', 6: '6月',
+            7: '7月', 8: '8月', 9: '9月', 10: '10月', 11: '11月', 12: '12月'
+        }
+        
+        month_name = month_names.get(month, f'{month}月')
+        named_file = self.csv_dir / f'{month_name}.csv'
+        if named_file.exists():
+            return named_file
+        
+        # 如果沒有按月份命名的文件，查找所有CSV文件
+        csv_files = list(self.csv_dir.glob('*.csv'))
+        
+        if not csv_files:
+            return None
+        
+        # 按修改時間排序（最新的在前）
+        csv_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        
+        # 如果只有少數文件，按順序對應月份
+        if len(csv_files) <= 12:
+            # 假設文件按月份順序排列
+            if month <= len(csv_files):
+                return csv_files[month - 1]
+        
+        # 如果文件較多，嘗試通過文件內容判斷
+        for csv_file in csv_files:
+            try:
+                # 嘗試讀取文件內容，檢查是否包含對應年月的數據
+                with open(csv_file, 'r', encoding='big5', errors='ignore') as f:
+                    reader = csv.reader(f)
+                    # 讀取前20行檢查
+                    found_match = False
+                    for i, row in enumerate(reader):
+                        if i > 20:  # 只檢查前20行
+                            break
+                        if len(row) >= 3:
+                            # 檢查日期欄位（第3列，索引2）
+                            date_str = row[2] if len(row) > 2 else ''
+                            if date_str:
+                                parsed_date = self._parse_ir_date(date_str, year)
+                                if parsed_date:
+                                    if parsed_date.year == gregorian_year and parsed_date.month == month:
+                                        found_match = True
+                                        break
+                    if found_match:
+                        return csv_file
+            except:
+                continue
+        
+        # 如果找不到匹配的，返回第一個文件
+        return csv_files[0] if csv_files else None
+
+    def _find_csv_files(self, year: int, month: int, market: str = 'sii') -> List[Path]:
+        """
+        查找該月份可能包含資料的所有 CSV，供合併解析。
+        目的：避免只讀取 `N月.csv` 而漏掉同月另存的下載檔（例如 t100sb02_*.csv）。
+        """
+        candidates: List[Path] = []
+        seen = set()
+
+        primary = self._find_csv_file(year, month, market)
+        if primary and primary.exists():
+            candidates.append(primary)
+            seen.add(str(primary.resolve()))
+
+        csv_files = list(self.csv_dir.glob('*.csv'))
+        # 依修改時間新到舊，讓較新的下載檔優先被讀到
+        csv_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+        gregorian_year = year + 1911
+        for csv_file in csv_files:
+            key = str(csv_file.resolve())
+            if key in seen:
+                continue
+            try:
+                matched = False
+                with open(csv_file, 'r', encoding='big5', errors='ignore') as f:
+                    reader = csv.reader(f)
+                    for i, row in enumerate(reader):
+                        if i > 60:
+                            break
+                        if not row or len(row) < 3:
+                            continue
+                        date_str = row[2].strip() if len(row) > 2 else ''
+                        if not date_str:
+                            continue
+                        parsed_date = self._parse_ir_date(date_str, year)
+                        if not parsed_date:
+                            continue
+                        if parsed_date.year == gregorian_year and parsed_date.month == month:
+                            matched = True
+                            break
+                if matched:
+                    candidates.append(csv_file)
+                    seen.add(key)
+            except Exception:
+                continue
+
+        return candidates
+
+    def _matches_market(self, company_code: str, market: str) -> bool:
+        """
+        依代號粗分市場，避免上市/上櫃在合併時互相混入。
+        - sii（上市）: 常見 1xxx/2xxx/9xxx
+        - otc（上櫃）: 常見 3xxx~8xxx
+        其他市場先不過濾。
+        """
+        code = (company_code or '').strip()
+        if not code:
+            return False
+
+        # 只看第一個數字字元；若不是數字則不做過濾，避免漏資料
+        first_digit = None
+        for ch in code:
+            if ch.isdigit():
+                first_digit = ch
+                break
+        if first_digit is None:
+            return True
+
+        if market == 'sii':
+            return first_digit in {'1', '2', '9'}
+        if market == 'otc':
+            return first_digit in {'3', '4', '5', '6', '7', '8'}
+        return True
+    
+    def fetch_ir_meetings(self, year: int, month: int, market: str = 'sii') -> List[Dict]:
+        """
+        從本地CSV文件讀取法說會資料
+        
+        Args:
+            year: 年度（民國年，例如115表示2026年）
+            month: 月份
+            market: 市場別 ('sii'=上市, 'otc'=上櫃, 'rotc'=興櫃, 'pub'=公開發行)
+            
+        Returns:
+            法說會列表
+        """
+        cache_key = f"ir_{year}_{month}_{market}"
+        
+        # 檢查緩存
+        if self._is_cache_valid(cache_key):
+            return self.cache[cache_key]
+        
+        meetings = []
+        seen_meetings = set()
+
+        # 查找同月可能的所有 CSV，做合併解析
+        csv_files = self._find_csv_files(year, month, market)
+
+        if not csv_files:
+            print(f"未找到 {year}年{month}月 的CSV文件，請確保文件已放置在 {self.csv_dir} 目錄中")
+            return []
+
+        for csv_file in csv_files:
+            try:
+                # 讀取CSV文件（使用Big5編碼）
+                with open(csv_file, 'r', encoding='big5', errors='ignore') as f:
+                    csv_reader = csv.reader(f)
+                    rows = list(csv_reader)
+
+                    # 找到表頭行
+                    header_row = -1
+                    for i, row in enumerate(rows):
+                        if len(row) > 0:
+                            row_text = ' '.join(row)
+                            # 檢查是否包含表頭關鍵字
+                            if '公司代號' in row_text or '公司名稱' in row_text or '召開' in row_text:
+                                header_row = i
+                                break
+
+                    # 如果找到表頭，從下一行開始解析
+                    start_row = header_row + 1 if header_row >= 0 else 1
+
+                    # 解析數據行
+                    for row in rows[start_row:]:
+                        if len(row) >= 3:  # 至少要有公司代號、名稱、日期
+                            try:
+                                company_code = row[0].strip() if len(row) > 0 else ''
+                                company_name = row[1].strip() if len(row) > 1 else ''
+                                meeting_date_str = row[2].strip() if len(row) > 2 else ''
+                                meeting_time = row[3].strip() if len(row) > 3 else ''
+                                location = row[4].strip() if len(row) > 4 else ''
+
+                                # 跳過空行或無效數據
+                                if not company_code or not company_name:
+                                    continue
+                                if '公司代號' in company_code or '公司名稱' in company_code:
+                                    continue
+                                if not self._matches_market(company_code, market):
+                                    continue
+
+                                # 解析日期（格式可能是 115/01/28 或 116/01/28）
+                                meeting_date = self._parse_ir_date(meeting_date_str, year)
+
+                                # 如果日期解析成功，添加數據（不嚴格限制月份，因為CSV文件可能包含多個月的數據）
+                                if meeting_date:
+                                    gregorian_year = year + 1911
+                                    # 允許年份有1年的誤差（因為CSV可能是去年的數據）
+                                    year_diff = abs(meeting_date.year - gregorian_year)
+                                    # 如果年份匹配，且月份也匹配，則添加
+                                    # 但如果查詢的月份文件不存在，也允許添加相近月份的數據（±1個月）
+                                    if year_diff <= 1:
+                                        # 嚴格匹配月份，或者允許±1個月的誤差（處理文件命名和實際內容不匹配的情況）
+                                        month_diff = abs(meeting_date.month - month)
+                                        if month_diff == 0 or (month_diff <= 1 and len(meetings) == 0):
+                                            dedupe_key = (company_code, meeting_date.isoformat(), meeting_time)
+                                            if dedupe_key in seen_meetings:
+                                                continue
+                                            seen_meetings.add(dedupe_key)
+                                            meetings.append({
+                                                'company_code': company_code,
+                                                'company_name': company_name,
+                                                'meeting_date': meeting_date.isoformat(),
+                                                'meeting_time': meeting_time,
+                                                'location': location,
+                                                'year': year,
+                                                'month': month,
+                                                'market': market
+                                            })
+                            except Exception:
+                                continue
+            except Exception as e:
+                print(f"讀取CSV文件時發生錯誤: {str(e)}")
+        
+        # 更新緩存
+        self.cache[cache_key] = meetings
+        self.cache_time[cache_key] = time.time()
+        
+        return meetings
+    
+    def get_upcoming_ir_meetings(self, months_ahead: int = 3) -> List[Dict]:
+        """
+        獲取未來幾個月的法說會資料（使用民國年）
+        
+        Args:
+            months_ahead: 往前查詢幾個月（預設3個月）
+            
+        Returns:
+            法說會列表（按日期排序）
+        """
+        now = datetime.now(self.taiwan_tz)
+        current_year = now.year
+        current_month = now.month
+        
+        # 轉換為民國年
+        roc_year = current_year - 1911
+        
+        all_meetings = []
+        
+        # 查詢當前月份及未來幾個月
+        for i in range(months_ahead):
+            year = current_year
+            month = current_month + i
+            roc_year_query = roc_year
+            
+            # 處理跨年
+            while month > 12:
+                month -= 12
+                year += 1
+                roc_year_query += 1
+            
+            # 查詢上市市場（sii）
+            meetings = self.fetch_ir_meetings(roc_year_query, month, 'sii')
+            all_meetings.extend(meetings)
+            
+            # 也可以查詢上櫃市場（otc）
+            meetings_otc = self.fetch_ir_meetings(roc_year_query, month, 'otc')
+            all_meetings.extend(meetings_otc)
+        
+        # 按日期排序
+        all_meetings.sort(key=lambda x: x.get('meeting_date', ''))
+        
+        return all_meetings
+    
+    def get_ir_timeline(self, months_ahead: int = 3) -> Dict:
+        """
+        獲取法說會時間線資料
+        
+        Args:
+            months_ahead: 往前查詢幾個月
+            
+        Returns:
+            時間線資料（按日期分組）
+        """
+        meetings = self.get_upcoming_ir_meetings(months_ahead)
+        
+        # 按日期分組
+        timeline = {}
+        for meeting in meetings:
+            date_str = meeting.get('meeting_date', '')[:10]  # 只取日期部分
+            if date_str not in timeline:
+                timeline[date_str] = []
+            timeline[date_str].append(meeting)
+        
+        # 轉換為列表格式（按日期排序）
+        timeline_list = []
+        for date_str in sorted(timeline.keys()):
+            timeline_list.append({
+                'date': date_str,
+                'meetings': timeline[date_str],
+                'count': len(timeline[date_str])
+            })
+        
+        market_counts = {'sii': 0, 'otc': 0, 'other': 0}
+        for m in meetings:
+            mk = (m.get('market') or '').lower()
+            if mk in ('sii', 'otc'):
+                market_counts[mk] += 1
+            else:
+                market_counts['other'] += 1
+
+        return {
+            'timeline': timeline_list,
+            'total_meetings': len(meetings),
+            'market_counts': market_counts,
+            'date_range': {
+                'start': timeline_list[0]['date'] if timeline_list else None,
+                'end': timeline_list[-1]['date'] if timeline_list else None
+            },
+            'timestamp': datetime.now(self.taiwan_tz).isoformat()
+        }
+    
+    def list_ir_csv_files(self) -> List[str]:
+        """掃描 ir_csv 目錄，回傳去重後的 CSV 檔名列表（已排序）。"""
+        if not self.csv_dir.exists():
+            return []
+        import re
+
+        files = [p for p in self.csv_dir.iterdir() if p.is_file() and p.suffix.lower() == '.csv']
+        # 先以新到舊排序，讓最新上傳有優先權
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+        # key: (month, market) -> filename
+        # month: int or None, market: 'sii'/'otc'/None
+        dedup = {}
+
+        def _name_priority(name: str) -> int:
+            # 優先顯示標準命名：N月-市.csv / N月-櫃.csv / N月.csv
+            if re.fullmatch(r'\d{1,2}月-(市|櫃)\.csv', name):
+                return 3
+            if re.fullmatch(r'\d{1,2}月\.csv', name):
+                return 2
+            return 1
+
+        for p in files:
+            month = None
+            market = None
+
+            m = re.fullmatch(r'(\d{1,2})月-(市|櫃)\.csv', p.name)
+            if m:
+                month = int(m.group(1))
+                market = 'sii' if m.group(2) == '市' else 'otc'
+            else:
+                m2 = re.fullmatch(r'(\d{1,2})月\.csv', p.name)
+                if m2:
+                    month = int(m2.group(1))
+                else:
+                    m3 = re.search(r'20\d{2}(0[1-9]|1[0-2])\d{2}', p.name)
+                    if m3:
+                        try:
+                            month = int(m3.group(1))
+                        except ValueError:
+                            month = None
+                    # 不是標準名稱則嘗試從內容辨識
+                    try:
+                        b = p.read_bytes()
+                        content_month = self._detect_month_from_csv_content(b)
+                        if content_month is not None:
+                            month = content_month
+                        market = self._detect_market_from_csv_content(b)
+                    except Exception:
+                        pass
+
+            key = (month, market)
+            if key not in dedup:
+                dedup[key] = p.name
+                continue
+
+            current = dedup[key]
+            if _name_priority(p.name) > _name_priority(current):
+                dedup[key] = p.name
+
+        # 若同月份已有上市/上櫃，則隱藏該月 market=None 的泛用檔，避免多一格
+        months_with_market = {m for (m, mk) in dedup.keys() if m is not None and mk in ('sii', 'otc')}
+        filtered = []
+        for (m, mk), name in dedup.items():
+            if m in months_with_market and mk is None:
+                continue
+            filtered.append(name)
+
+        return sorted(filtered)
+    
+    def get_ir_csv_last_updated(self) -> Optional[datetime]:
+        """回傳 ir_csv 目錄內 CSV 檔案的最新修改時間。"""
+        if not self.csv_dir.exists():
+            return None
+        latest = None
+        for p in self.csv_dir.iterdir():
+            if p.is_file() and p.suffix.lower() == '.csv':
+                mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=self.taiwan_tz)
+                if latest is None or mtime > latest:
+                    latest = mtime
+        return latest
+    
+    def _detect_month_from_csv_content(self, content: bytes) -> Optional[int]:
+        """
+        從 CSV 內容辨識代表哪個月份。掃描日期欄（常見格式 115/01/08、115/01/13 至 115/01/20），
+        取出現最多次的月份。若無法辨識則回傳 None。
+        """
+        import re
+        text = None
+        for enc in ('big5', 'cp950', 'utf-8', 'utf-8-sig'):
+            try:
+                text = content.decode(enc, errors='ignore')
+                if text:
+                    break
+            except LookupError:
+                continue
+        if not text:
+            # 最後兜底，至少不要因編碼問題整個辨識失敗
+            try:
+                text = content.decode('latin-1', errors='ignore')
+            except Exception:
+                return None
+        if not text:
+            return None
+        import io
+        month_counts = {}
+        try:
+            reader = csv.reader(io.StringIO(text))
+            for row_idx, row in enumerate(reader):
+                if row_idx > 200:
+                    break
+                for i, cell in enumerate(row):
+                    if i > 6:
+                        break
+                    cell = (cell or '').strip().strip('"')
+                    m = re.search(r'(\d{2,3})/(\d{1,2})/(\d{1,2})', cell)
+                    if m:
+                        try:
+                            month = int(m.group(2))
+                            if 1 <= month <= 12:
+                                month_counts[month] = month_counts.get(month, 0) + 1
+                        except ValueError:
+                            pass
+        except Exception:
+            return None
+        if not month_counts:
+            return None
+        return max(month_counts.keys(), key=lambda m: month_counts[m])
+
+    def _detect_market_from_csv_content(self, content: bytes) -> Optional[str]:
+        """
+        從 CSV 內容粗分市場：
+        - sii（上市）: 代號首碼常見 1/2/9
+        - otc（上櫃）: 代號首碼常見 3~8
+        若無法判斷回傳 None。
+        """
+        text = None
+        for enc in ('big5', 'cp950', 'utf-8', 'utf-8-sig'):
+            try:
+                text = content.decode(enc, errors='ignore')
+                if text:
+                    break
+            except LookupError:
+                continue
+        if not text:
+            try:
+                text = content.decode('latin-1', errors='ignore')
+            except Exception:
+                return None
+        if not text:
+            return None
+
+        import io
+        sii = 0
+        otc = 0
+        checked = 0
+        try:
+            reader = csv.reader(io.StringIO(text))
+            for row_idx, row in enumerate(reader):
+                if row_idx > 1000 or checked > 500:
+                    break
+                if not row:
+                    continue
+                code = (row[0] if len(row) > 0 else '').strip().strip('"')
+                if not code or '公司代號' in code:
+                    continue
+                first_digit = None
+                for ch in code:
+                    if ch.isdigit():
+                        first_digit = ch
+                        break
+                if first_digit is None:
+                    continue
+                checked += 1
+                if first_digit in {'1', '2', '9'}:
+                    sii += 1
+                elif first_digit in {'3', '4', '5', '6', '7', '8'}:
+                    otc += 1
+        except Exception:
+            return None
+
+        if sii == 0 and otc == 0:
+            return None
+        return 'sii' if sii >= otc else 'otc'
+    
+    def save_uploaded_csv(self, filename: str, content: bytes) -> tuple:
+        """
+        將上傳的 CSV 存到 ir_csv，並清除快取。
+        會嘗試從內容辨識月份與市場，若成功則存為：
+        - N月-市.csv（上市）
+        - N月-櫃.csv（上櫃）
+        若無法辨識市場則存 N月.csv；若月份也無法辨識則保留原檔名。
+        回傳 (saved_filename, detected_month or None, detected_market or None)
+        """
+        import re
+        detected_month = self._detect_month_from_csv_content(content)
+        detected_market = self._detect_market_from_csv_content(content)
+        if detected_month is not None:
+            month_names = {
+                1: '1月', 2: '2月', 3: '3月', 4: '4月', 5: '5月', 6: '6月',
+                7: '7月', 8: '8月', 9: '9月', 10: '10月', 11: '11月', 12: '12月'
+            }
+            month_name = month_names[detected_month]
+            if detected_market == 'sii':
+                safe = f'{month_name}-市.csv'
+            elif detected_market == 'otc':
+                safe = f'{month_name}-櫃.csv'
+            else:
+                safe = f'{month_name}.csv'
+        else:
+            base = Path(filename).name
+            if not base.lower().endswith('.csv'):
+                base = base + '.csv' if not base.endswith('.') else base[:-1] + '.csv'
+            safe = re.sub(r'[^\w\u4e00-\u9fff\-\s.]', '', base)
+            if not safe:
+                safe = f'upload_{int(datetime.now().timestamp())}.csv'
+        path = self.csv_dir / safe
+        self.csv_dir.mkdir(exist_ok=True)
+        with open(path, 'wb') as f:
+            f.write(content)
+
+        # 同月份同市場只保留一份，避免同一份資料出現多個檔名（例如 4月.csv / t100... / 4月-櫃.csv 並存）
+        if detected_month is not None and detected_market in ('sii', 'otc'):
+            for p in self.csv_dir.glob('*.csv'):
+                if p.name == safe:
+                    continue
+                try:
+                    with open(p, 'rb') as rf:
+                        b = rf.read()
+                    m = self._detect_month_from_csv_content(b)
+                    mk = self._detect_market_from_csv_content(b)
+                    if m == detected_month and mk == detected_market:
+                        p.unlink()
+                except Exception:
+                    # 不影響主流程，清理失敗就略過
+                    continue
+
+        self.cache.clear()
+        self.cache_time.clear()
+        return (safe, detected_month, detected_market)
+
+    def delete_ir_csv_file(self, filename: str) -> bool:
+        """刪除 ir_csv 目錄內指定檔案（僅允許刪除 .csv）。"""
+        if not filename:
+            return False
+        safe_name = Path(filename).name
+        if safe_name != filename:
+            return False
+        if not safe_name.lower().endswith('.csv'):
+            return False
+        target = self.csv_dir / safe_name
+        if not target.exists() or not target.is_file():
+            return False
+        target.unlink()
+        self.cache.clear()
+        self.cache_time.clear()
+        return True
