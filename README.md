@@ -1,44 +1,65 @@
 # MarketView En - 完整功能網站（本機版）
 
-這個版本是和我本人使用的版本一樣、具備完整功能的網站。  
-只要照以下步驟下載並啟動，就可以在本機觀看與使用。
+與作者日常使用的版本相同：**在本機跑滿資料抓取與運算**，不受雲端 IP 限制，**台股／國際報價、新聞與盤前等區塊可正常發揮**。
 
-與 `trading_system` 功能相同，**全部資料來源為 Yahoo Finance (yfinance)**，無需 Finnhub / Binance / Twelve Data API key。
+- **本機完整版（本 repo）**：clone 後 `python app.py`，開 `http://localhost:5000`。
+- **雲端示意版（免安裝試用）**：[https://trading-system-kkhs.onrender.com/](https://trading-system-kkhs.onrender.com/) — 功能受雲端與資料源限制較多，僅供快速體驗介面。
+
+資料以 **Yahoo Finance (yfinance)** 等為主，無需 Finnhub / Binance / Twelve Data API key 即可跑通主要流程。
 
 ---
 
-一個智能交易系統，具備擇時功能和策略自動匹配能力。
+## 首頁「看盤」各區塊（一頁整合）
 
-## 功能特色
+| 區塊 | 你做得到的事 |
+|------|----------------|
+| 🇺🇸 **美股市場** | 主要指數與個股報價、財報行事曆；一鍵更新 |
+| 🇹🇼 **台股市場** | 台股報價、60 天內財報行事曆；與大盤同步掌握 |
+| 🌍 **國際 · ETF · 金屬 · 加密 · 比率** | 國際指數；美股／台股 ETF（如 VOO、QQQ、0050）；COMEX 重金屬；加密 24h；**重要比率**可點進看走勢圖 |
+| 📰 **新聞聲量 · 盤前** | 24h 新聞關鍵詞彙整聲量、可展開新聞連結；**台股／美股盤前**分區更新 |
+| 📊 **三大法人** | 證交所 BFI82U 累計買賣超視覺化；**支援上傳 CSV** 補資料 |
+| 📊 **Benchmark 試算** | 自訂起訖日，一次看多市場指數**期間漲跌幅** |
+| 📅 **法人說明會 · 總經** | 法說時程整理、**CSV 上傳**；美國 **BLS 總經行事曆**連結與事記列表、可寫筆記 |
 
-- 📊 **市場監控**: 即時顯示美股、台股及主要國際市場盤勢
-- ⏰ **擇時功能**: 智能判斷最佳交易時機
-- 🎯 **策略匹配**: 自動選擇最適合當前市場環境的交易策略
-- 🌐 **Web 介面**: 一目了然的市場數據展示
+介面為 **可摺疊區塊 + 分區更新按鈕**，要專心看哪一塊就展開、按需重新整理，不必整頁重載。
 
-## 專案結構
+---
+
+## 「選股」分頁（台股）
+
+- 獨立頁面：`/selecting`
+- **策略篩選範例**：連續毛利率條件、近月營收年增、均線排列（5MA > 20MA）等，**後端多執行緒**掃描科技股池（詳見頁面說明）
+- 適合：想從「看盤」切到「**可執行的篩選清單**」時使用
+
+---
+
+## 核心能力（精簡）
+
+- 📊 **市場監控**：美股、台股、國際與商品同一視窗，更新時間與按鈕分區清楚
+- ⏰ **擇時／情境**：配合盤前、新聲量、總經與法說時間軸，快速對照當日環境
+- 🎯 **策略與選股**：首頁策略匹配 + 選股頁面條件篩選，兩條路線互補
+- 🌐 **Web 介面**：Chart.js 走勢、表格、上傳與筆記，**單一網址**完成研究流
+
+---
+
+## 專案結構（摘要）
 
 ```
-trading_system/
-├── app.py                 # Flask 主應用
-├── config.py             # 配置文件
-├── market_data/          # 市場數據模組
-│   ├── __init__.py
-│   ├── data_fetcher.py   # 數據獲取
-│   └── market_analyzer.py # 市場分析
-├── timing/               # 擇時模組
-│   ├── __init__.py
-│   └── timing_selector.py
-├── strategy/             # 策略模組
-│   ├── __init__.py
-│   └── strategy_matcher.py
-├── templates/            # HTML 模板
-│   └── index.html
-├── static/               # 靜態資源
-│   ├── css/
-│   └── js/
-└── requirements.txt      # 依賴套件
+marketview_pro/
+├── app.py                 # Flask 主程式
+├── config.py
+├── market_data/           # 行情與資料擷取
+├── timing/                # 擇時
+├── strategy/              # 策略匹配
+├── selecting/             # 選股篩選
+├── news_analysis/         # 新聞／盤前等
+├── economic_data/         # 總經相關
+├── templates/             # index.html、selecting.html
+├── static/
+└── requirements.txt
 ```
+
+---
 
 ## 安裝與使用
 
@@ -63,50 +84,22 @@ python app.py
 
 ### 4. 訪問網站
 
-打開瀏覽器訪問: http://localhost:5000
+瀏覽器開啟：**http://localhost:5000**（看盤）  
+選股：**http://localhost:5000/selecting**
 
-## 快速開始
-
-### 1. 安裝依賴套件
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2. 啟動應用程式
-
-```bash
-python app.py
-```
-
-### 3. 訪問網站
-
-打開瀏覽器訪問: `http://localhost:5000`
+---
 
 ## 詳細說明
 
-請參考 [`使用說明.md`](使用說明.md) 了解每個 Python 檔案的詳細功能和使用方法。
-
-## 開發計劃
-
-- [x] 基礎環境設置
-- [x] 市場數據獲取
-- [x] Web 介面
-- [x] 擇時功能實現
-- [x] 策略匹配算法
-- [ ] 回測系統
-- [ ] 風險管理模組
-- [ ] 更多技術指標
-- [ ] 歷史數據分析
+請參考 [`使用說明.md`](使用說明.md)、[`如何啟動系統.md`](如何啟動系統.md)。
 
 ## 技術棧
 
-- **後端**: Python, Flask
-- **數據**: yfinance, pandas
-- **前端**: HTML, CSS, JavaScript
-- **圖表**: Chart.js
+- **後端**: Python, Flask  
+- **數據**: yfinance, pandas  
+- **前端**: HTML, CSS, JavaScript  
+- **圖表**: Chart.js  
 
 ## License
 
 MIT
-
