@@ -1,6 +1,9 @@
-# MarketView En - 交易系統（本機 yfinance 版）
+# MarketView En - 完整功能網站（本機版）
 
-與 `trading_system` 功能相同，**全部資料來源為 Yahoo Finance (yfinance)**，無需 Finnhub / Binance / Twelve Data API key，專供本機使用。啟動方式：`cd D:\marketview_En` → `python app.py`。
+這個版本是和我本人使用的版本一樣、具備完整功能的網站。  
+只要照以下步驟下載並啟動，就可以在本機觀看與使用。
+
+與 `trading_system` 功能相同，**全部資料來源為 Yahoo Finance (yfinance)**，無需 Finnhub / Binance / Twelve Data API key。
 
 ---
 
@@ -39,19 +42,26 @@ trading_system/
 
 ## 安裝與使用
 
-### 1. 安裝依賴
+### 1. 下載專案
+
+```bash
+git clone https://github.com/En0526/marketview_pro.git
+cd marketview_pro
+```
+
+### 2. 安裝依賴
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 運行應用
+### 3. 運行應用
 
 ```bash
 python app.py
 ```
 
-### 3. 訪問網站
+### 4. 訪問網站
 
 打開瀏覽器訪問: http://localhost:5000
 
