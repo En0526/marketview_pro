@@ -8,6 +8,151 @@ function toggleCollapsibleSection(headerEl) {
     section.setAttribute('data-expanded', expanded ? 'false' : 'true');
 }
 
+// —— 盤前區塊：台北時段與 AI 速覽 ————————————————————————————————
+
+function getTaipeiMinutesFromMidnight() {
+    var parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Taipei',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23'
+    }).formatToParts(new Date());
+    var h = 0, m = 0;
+    parts.forEach(function (p) {
+        if (p.type === 'hour') h = parseInt(p.value, 10);
+        if (p.type === 'minute') m = parseInt(p.value, 10);
+    });
+    return h * 60 + m;
+}
+
+function getPremarketSessionFromTaipeiMinutes(mins) {
+    if (mins >= 14 * 60 || mins < 2 * 60) return 'evening';
+    if (mins >= 6 * 60 && mins < 14 * 60) return 'morning';
+    return 'off_hours';
+}
+
+function premarketLabelsForSession(session) {
+    if (session === 'evening') {
+        return {
+            tw: '台股盤後',
+            us: '美股盤前',
+            hint: '台北時間 14:00～翌日 02:00：標註側重「美股盤前」與「台股盤後」；下方列表仍為原爬蟲資料。'
+        };
+    }
+    if (session === 'morning') {
+        return {
+            tw: '台股盤前',
+            us: '美股盤後',
+            hint: '台北時間 06:00～14:00：標註側重「台股盤前」與「美股盤後」；下方列表仍為原爬蟲資料。'
+        };
+    }
+    return {
+        tw: '摘要',
+        us: '摘要',
+        hint: '台北時間 02:00～06:00：非主要對盤視窗，以下為參考摘要。'
+    };
+}
+
+/** 若 digestData 有後端欄位則與 LLM 一致，否則用前端台北時間推斷 */
+function applyPremarketSessionUI(digestData) {
+    var hintEl = document.getElementById('premarket-window-hint');
+    var twB = document.getElementById('taiwan-premarket-badge');
+    var usB = document.getElementById('us-premarket-badge');
+    if (digestData && digestData.tw_panel_label) {
+        if (twB) twB.textContent = '（' + digestData.tw_panel_label + '）';
+        if (usB) usB.textContent = '（' + digestData.us_panel_label + '）';
+        if (hintEl) hintEl.textContent = digestData.session_hint_tw || '';
+        return;
+    }
+    var L = premarketLabelsForSession(getPremarketSessionFromTaipeiMinutes(getTaipeiMinutesFromMidnight()));
+    if (twB) twB.textContent = '（' + L.tw + '）';
+    if (usB) usB.textContent = '（' + L.us + '）';
+    if (hintEl) hintEl.textContent = L.hint;
+}
+
+async function loadAIDigest(forceRefresh) {
+    forceRefresh = !!forceRefresh;
+    var body = document.getElementById('ai-digest-body');
+    if (body && (forceRefresh || !window._aiDigestLoadedOnce)) {
+        body.innerHTML = '<div class="loading">載入 AI 速覽…</div>';
+    }
+    try {
+        var url = forceRefresh ? '/api/ai-digest?refresh=true' : '/api/ai-digest';
+        var res = await fetch(url);
+        var result = await res.json();
+        if (result.success && result.data) {
+            displayAIDigest(result.data);
+            if (result.data.timestamp) {
+                updateSectionTime('ai-digest-update-time', result.data.timestamp);
+            }
+            applyPremarketSessionUI(result.data);
+            window._aiDigestLoadedOnce = true;
+        } else {
+            var msg = (result.error || '未知錯誤');
+            if (body) body.innerHTML = '<div class="error">AI 速覽載入失敗：' + msg.replace(/</g, '&lt;') + '</div>';
+            applyPremarketSessionUI(null);
+        }
+    } catch (e) {
+        console.error('loadAIDigest', e);
+        if (body) body.innerHTML = '<div class="error">AI 速覽錯誤：' + (e.message || '').replace(/</g, '&lt;') + '</div>';
+        applyPremarketSessionUI(null);
+    }
+}
+
+function displayAIDigest(data) {
+    var body = document.getElementById('ai-digest-body');
+    if (!body) return;
+    if (!data || data.enabled === false) {
+        body.innerHTML = '<div class="ai-digest-disabled">' +
+            '<p>AI 速覽未啟用。</p><p class="ai-digest-muted">' +
+            (data && data.message ? data.message.replace(/</g, '&lt;') : '請在環境變數設定 OPENAI_API_KEY 後重啟。') +
+            '</p></div>';
+        return;
+    }
+    var top5 = (data.top5 || []).slice(0, 3);
+    var pm = data.premarket_bullets || { tw: [], us: [] };
+    var twPm = pm.tw || [];
+    var usPm = pm.us || [];
+    var twHead = data.tw_panel_label || '台股';
+    var usHead = data.us_panel_label || '美股';
+    var cacheNote = data.cached ? '<span class="ai-digest-muted">（快取）</span>' : '';
+    var errNote = data.llm_error ? '<p class="ai-digest-warn">' + (data.message || '').replace(/</g, '&lt;') + '</p>' : '';
+
+    var topHtml = top5.map(function (row, i) {
+        var name = (row.name || '').replace(/</g, '&lt;');
+        var sym = (row.symbol || '').replace(/</g, '&lt;');
+        var ch = row.prior_session_change_label != null ? row.prior_session_change_label : '－';
+        var chClass = '';
+        if (ch && ch !== '－' && String(ch).charAt(0) === '+') chClass = 'change-positive';
+        else if (ch && String(ch).charAt(0) === '-') chClass = 'change-negative';
+        var line = (row.ai_news_line || '').replace(/</g, '&lt;');
+        return '<div class="ai-digest-top-item">' +
+            '<div class="ai-digest-top-rank">' + (row.rank || (i + 1)) + '</div>' +
+            '<div class="ai-digest-top-main">' +
+            '<div class="ai-digest-top-title">' + name + ' <span class="ai-digest-symbol">(' + sym + ')</span></div>' +
+            '<div class="ai-digest-top-change">前盤漲跌約：<span class="' + chClass + '">' + ch + '</span></div>' +
+            '<div class="ai-digest-top-news"><span class="ai-digest-k">新聞</span>：' + line + '</div>' +
+            '</div></div>';
+    }).join('');
+
+    function bulletsHtml(arr) {
+        if (!arr.length) return '<p class="ai-digest-muted">（無摘要）</p>';
+        return '<ul class="ai-digest-bullets">' + arr.map(function (t) {
+            return '<li>' + String(t).replace(/</g, '&lt;') + '</li>';
+        }).join('') + '</ul>';
+    }
+
+    body.innerHTML =
+        errNote +
+        '<div class="ai-digest-block ai-digest-premarket-block"><h4 class="ai-digest-block-title">盤前／盤後 · LLM 統整 ' + cacheNote + '</h4>' +
+        '<div class="ai-digest-pm-grid">' +
+        '<div class="ai-digest-pm-col"><div class="ai-digest-pm-head">〈' + twHead + '〉</div>' + bulletsHtml(twPm) + '</div>' +
+        '<div class="ai-digest-pm-col"><div class="ai-digest-pm-head">〈' + usHead + '〉</div>' + bulletsHtml(usPm) + '</div>' +
+        '</div></div>' +
+        '<div class="ai-digest-block"><h4 class="ai-digest-block-title">新聞聲量分析（前24小時）· 前三名</h4>' +
+        (topHtml || '<p class="ai-digest-muted">暫無聲量資料</p>') + '</div>';
+}
+
 // 財報日期顯示為 M/D
 function formatEarningsDate(isoDate) {
     if (!isoDate || isoDate.length < 10) return isoDate || '';
@@ -36,6 +181,28 @@ function runBelowSectionsInOrder(forceRefresh) {
 // 初始化：市場數據先載入；下方區塊延遲 2 秒後依固定順序「一個接一個」載入，首輪不強制 refresh 以減輕算力
 document.addEventListener('DOMContentLoaded', function() {
     loadMarketData(false);
+    applyPremarketSessionUI(null);
+    loadAIDigest(false);
+    var aiBtn = document.getElementById('ai-digest-refresh-btn');
+    if (aiBtn) {
+        aiBtn.addEventListener('click', function () {
+            var btn = this;
+            if (btn.disabled) return;
+            var t = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '重算中…';
+            loadAIDigest(true).then(function () {
+                btn.textContent = '✓ 已更新';
+                setTimeout(function () {
+                    btn.textContent = t;
+                    btn.disabled = false;
+                }, 1800);
+            }).catch(function () {
+                btn.textContent = t;
+                btn.disabled = false;
+            });
+        });
+    }
     setTimeout(function() {
         runBelowSectionsInOrder(false).catch(function(e) { console.error(e); });
     }, 2000);
@@ -680,20 +847,23 @@ function displayMarketSection(containerId, markets, sectionTitle = null, useScro
             const sessionBadge = showSessionLabel && market.session
                 ? `<span class="market-card-session ${market.session === '日盤' ? 'session-day' : 'session-night'}">${market.session}</span>`
                 : '';
-            const earningsBadge = market.earnings_date
-                ? `<span class="market-card-earnings" title="財報公布日 ${market.earnings_date}">財報 ${formatEarningsDate(market.earnings_date)}</span>`
-                : '';
+            const badgesHtml = sessionBadge ? `<div class="market-card-badges">${sessionBadge}</div>` : '';
+            let chartTitle = '點擊查看過去一年走勢';
+            if (market.earnings_date) {
+                chartTitle += ' · 財報 ' + formatEarningsDate(market.earnings_date);
+            }
+            const titleAttr = chartTitle.replace(/"/g, '&quot;');
             const symbolAttr = (market.symbol || '').replace(/"/g, '&quot;');
             const nameAttr = (market.display_name || market.name || '').replace(/"/g, '&quot;');
             
             return `
-                <div class="market-card market-card-chartable ${market.earnings_date ? 'has-upcoming-earnings' : ''}" data-symbol="${symbolAttr}" data-display-name="${nameAttr}" title="點擊查看過去一年走勢">
+                <div class="market-card market-card-chartable" data-symbol="${symbolAttr}" data-display-name="${nameAttr}" title="${titleAttr}">
                     <div class="market-card-header">
                         <div>
                             <div class="market-card-name">${(market.display_name || market.name || 'N/A').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
                             <div class="market-card-symbol">${(market.symbol || 'N/A').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
                         </div>
-                        <div class="market-card-badges">${sessionBadge}${earningsBadge}</div>
+                        ${badgesHtml}
                     </div>
                     <div class="market-card-price">
                         ${market.current_price ? market.current_price.toLocaleString() : 'N/A'}
@@ -1523,6 +1693,49 @@ async function uploadIRCsv() {
     setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 4000);
 }
 
+async function downloadIRCsv() {
+    const statusEl = document.getElementById('ir-upload-status');
+    const button = event && event.target;
+    if (button) {
+        button.disabled = true;
+        button.textContent = '下載中...';
+    }
+    if (statusEl) statusEl.textContent = '正在下載當月與下個月的上市/上櫃法說會 CSV...';
+
+    try {
+        const res = await fetch('/api/ir-meetings/download-csv', { method: 'POST' });
+        const result = await res.json();
+        if (result.success && result.data) {
+            const summary = result.data.summary || {};
+            const counts = summary.counts || {};
+            const downloaded = counts.downloaded || 0;
+            const fresh = counts.fresh || 0;
+            const failed = counts.failed || 0;
+            if (result.data.uploaded_files) renderIRFiles(result.data.uploaded_files);
+            if (result.data.csv_last_updated) updateIRDataUpdateTime('ir-data-update-time', result.data.csv_last_updated);
+            if (statusEl) {
+                statusEl.textContent = '下載完成：新增/更新 ' + downloaded + '、今日已最新 ' + fresh + (failed ? '、失敗 ' + failed : '');
+            }
+            await loadIRMeetings(true);
+        } else {
+            if (statusEl) statusEl.textContent = '下載失敗：' + (result.error || '未知錯誤');
+            showError('下載法說會 CSV 失敗: ' + (result.error || '未知錯誤'));
+        }
+    } catch (err) {
+        if (statusEl) statusEl.textContent = '下載錯誤：' + (err.message || '請稍後再試');
+        showError('下載法說會 CSV 錯誤: ' + (err.message || '請稍後再試'));
+    }
+
+    if (button) {
+        button.textContent = '✓ 已下載';
+        setTimeout(function() {
+            button.textContent = '下載當月/下月 CSV';
+            button.disabled = false;
+        }, 2500);
+    }
+    setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 8000);
+}
+
 // 載入法人說明會資料
 async function loadIRMeetings(forceRefresh = false) {
     try {
@@ -1641,6 +1854,48 @@ async function refreshInstitutionalNet() {
         btn.textContent = '✓ 已更新';
         setTimeout(function() { btn.textContent = '🔄 更新'; btn.disabled = false; }, 2000);
     }
+}
+
+async function downloadInstitutionalCsv() {
+    var statusEl = document.getElementById('institutional-upload-status');
+    var btn = event && event.target;
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '下載中...';
+    }
+    if (statusEl) statusEl.textContent = '正在從證交所下載今年缺少的 CSV，請稍候...';
+
+    try {
+        var res = await fetch('/api/institutional-net/download-csv', { method: 'POST' });
+        var result = await res.json();
+        if (result.success && result.data) {
+            var counts = result.data.counts || {};
+            var downloaded = counts.downloaded || 0;
+            var existing = counts.existing || 0;
+            var skipped = counts.skipped || 0;
+            var failed = counts.failed || 0;
+            renderInstitutionalDates(result.data.uploaded_dates || [], new Date().getFullYear());
+            if (statusEl) {
+                statusEl.textContent = '下載完成：新增 ' + downloaded + '、已有 ' + existing + '、略過 ' + skipped + (failed ? '、失敗 ' + failed : '');
+            }
+            await loadInstitutionalNet(true);
+        } else {
+            if (statusEl) statusEl.textContent = '下載失敗：' + (result.error || '未知錯誤');
+            showError('下載三大法人 CSV 失敗: ' + (result.error || '未知錯誤'));
+        }
+    } catch (err) {
+        if (statusEl) statusEl.textContent = '下載錯誤：' + (err.message || '請稍後再試');
+        showError('下載三大法人 CSV 錯誤: ' + (err.message || '請稍後再試'));
+    }
+
+    if (btn) {
+        btn.textContent = '✓ 已下載';
+        setTimeout(function() {
+            btn.textContent = '下載今年缺少 CSV';
+            btn.disabled = false;
+        }, 2500);
+    }
+    setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 8000);
 }
 
 async function loadBenchmarkPerformance() {

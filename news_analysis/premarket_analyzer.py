@@ -6,6 +6,12 @@ from typing import Dict, List, Optional
 import pytz
 import time
 from news_analysis.news_fetcher import NewsFetcher
+from news_analysis.persistent_news_cache import (
+    load_entry,
+    load_entry_saved_at,
+    normalize_premarket_payload,
+    save_entry,
+)
 from config import Config
 
 class PremarketAnalyzer:
@@ -111,6 +117,15 @@ class PremarketAnalyzer:
             if cache_data and (time.time() - cache_time) < 3600:  # 緩存1小時
                 return cache_data
         
+        if not force_refresh:
+            disk = load_entry("premarket_tw")
+            if disk and isinstance(disk, dict):
+                t0 = load_entry_saved_at("premarket_tw")
+                if t0 is not None:
+                    self._taiwan_premarket_cache = disk
+                    self._taiwan_premarket_cache_time = t0
+                    return disk
+        
         taiwan_time = self._get_taiwan_market_time()
         today = taiwan_time.date()
         
@@ -190,9 +205,10 @@ class PremarketAnalyzer:
         # 更新緩存
         self._taiwan_premarket_cache = result
         self._taiwan_premarket_cache_time = time.time()
+        save_entry("premarket_tw", normalize_premarket_payload(result))
         
         return result
-    
+
     def get_us_premarket_news(self, force_refresh: bool = False) -> Dict:
         """
         獲取美股盤前新聞
@@ -214,6 +230,15 @@ class PremarketAnalyzer:
             cache_time = getattr(self, '_us_premarket_cache_time', 0)
             if cache_data and (time.time() - cache_time) < 3600:  # 緩存1小時
                 return cache_data
+        
+        if not force_refresh:
+            disk = load_entry("premarket_us")
+            if disk and isinstance(disk, dict):
+                t0 = load_entry_saved_at("premarket_us")
+                if t0 is not None:
+                    self._us_premarket_cache = disk
+                    self._us_premarket_cache_time = t0
+                    return disk
         
         us_time = self._get_us_market_time()
         # 美股開盤時間 9:30 AM ET
@@ -280,10 +305,9 @@ class PremarketAnalyzer:
         # 更新緩存
         self._us_premarket_cache = result
         self._us_premarket_cache_time = time.time()
+        save_entry("premarket_us", normalize_premarket_payload(result))
         
         return result
-    
-    def get_premarket_summary(self) -> Dict:
         """
         獲取盤前資料總覽（使用緩存）
         

@@ -11,4 +11,5 @@ beautifulsoup4>=4.12.0
 lxml>=4.9.0
 feedparser>=6.0.10
 openpyxl>=3.1.0
+google-genai>=1.0.0  # Gemini AI 速覽（勿改用舊套件 google-generativeai）
 

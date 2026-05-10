@@ -22,6 +22,24 @@
 
         <div class="market-sections">
             <div id="skipped-symbols-hint" class="skipped-symbols-hint hidden" aria-hidden="true"></div>
+            <section class="market-section ai-digest-section collapsible-section" data-expanded="true">
+                <div class="section-header section-header-toggle" onclick="toggleCollapsibleSection(this)">
+                    <div class="section-header-left">
+                        <span class="toggle-icon">▶</span>
+                        <h2>🤖 AI 速覽</h2>
+                    </div>
+                    <div class="section-controls" onclick="event.stopPropagation()">
+                        <span class="update-time" id="ai-digest-update-time">-</span>
+                        <button type="button" class="btn-refresh-small" id="ai-digest-refresh-btn" title="重新向 LLM 請求摘要">🔄 重算</button>
+                    </div>
+                </div>
+                <div class="section-body">
+                    <p class="ai-digest-hint">以爬蟲新聲量與盤前新聞為素材，由 LLM 濃縮為速讀。請至 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 建立金鑰，將專案根目錄 <code>.env.example</code> 複製為 <code>.env</code> 並填入 <code>GEMINI_API_KEY</code>（說明見檔内註解）；未設 Gemini 時可用 <code>OPENAI_API_KEY</code>。<a href="https://ai.google.dev/gemini-api/docs/quickstart?hl=zh-tw" target="_blank" rel="noopener">官方串接說明</a>。漲跌幅為約略前盤相對變化，僅供參考。</p>
+                    <div id="ai-digest-body" class="ai-digest-body">
+                        <div class="loading">載入 AI 速覽…</div>
+                    </div>
+                </div>
+            </section>
             <!-- 美股市場 -->
             <section class="market-section collapsible-section" data-expanded="false">
                 <div class="section-header section-header-toggle" onclick="toggleCollapsibleSection(this)">
@@ -74,7 +92,7 @@
                 <div class="section-header section-header-toggle" onclick="toggleCollapsibleSection(this)">
                     <div class="section-header-left">
                         <span class="toggle-icon">▶</span>
-                        <h2>🌍 國際 · 📈 ETF · 🥇 金屬 · ₿ 加密 · 📊 比率</h2>
+                        <h2>國際 · ETF · 金屬 · 加密 · 比率</h2>
                     </div>
                     <div class="section-controls" onclick="event.stopPropagation()">
                         <button class="btn-refresh-small" onclick="refreshMarketData('international')" title="更新國際">🔄 國際</button>
@@ -148,10 +166,11 @@
                     </div>
                     <div class="combined-subsection">
                         <h3 class="market-subsection-title">🌅 盤前資料</h3>
+                        <p class="premarket-window-hint" id="premarket-window-hint">台北時間判讀：載入中…</p>
                         <div class="premarket-container">
                             <div class="premarket-market">
                                 <div class="premarket-market-header">
-                                    <h3>🇹🇼 台股</h3>
+                                    <h3>🇹🇼 台股 <span id="taiwan-premarket-badge" class="premarket-session-badge" aria-hidden="true"></span></h3>
                                     <div class="section-controls">
                                         <button class="btn-refresh-small" onclick="refreshPremarketData('taiwan')" title="更新台股盤前資料">🔄 更新</button>
                                     </div>
@@ -162,7 +181,7 @@
                             </div>
                             <div class="premarket-market">
                                 <div class="premarket-market-header">
-                                    <h3>🇺🇸 美股</h3>
+                                    <h3>🇺🇸 美股 <span id="us-premarket-badge" class="premarket-session-badge" aria-hidden="true"></span></h3>
                                     <div class="section-controls">
                                         <button class="btn-refresh-small" onclick="refreshPremarketData('us')" title="更新美股盤前資料">🔄 更新</button>
                                     </div>
@@ -200,6 +219,7 @@
                         <input type="file" id="institutional-csv-file" accept=".csv" multiple />
                         <input type="text" id="institutional-csv-date" placeholder="日期留空則從檔名/內容辨識" maxlength="8" title="單檔時可填 YYYYMMDD，多檔時請檔名含日期" />
                         <button type="button" class="btn-refresh-small" onclick="uploadInstitutionalCsv()">上傳</button>
+                        <button type="button" class="btn-refresh-small" onclick="downloadInstitutionalCsv()" title="自動下載今年缺少的 BFI82U CSV">下載今年缺少 CSV</button>
                         <span id="institutional-upload-status" class="institutional-upload-status"></span>
                     </div>
                 </div>
@@ -273,6 +293,7 @@
                                 <span class="ir-upload-hint">系統會從內容辨識月份，自動存為「N月.csv」並覆蓋同月份舊檔</span>
                                 <input type="file" id="ir-csv-file" accept=".csv" multiple />
                                 <button type="button" class="btn-refresh-small" onclick="uploadIRCsv()">上傳</button>
+                                <button type="button" class="btn-refresh-small" onclick="downloadIRCsv()" title="自動下載當月與下個月的上市/上櫃法說會 CSV">下載當月/下月 CSV</button>
                                 <span id="ir-upload-status" class="institutional-upload-status"></span>
                             </div>
                         </div>

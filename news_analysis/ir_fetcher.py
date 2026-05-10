@@ -4,11 +4,19 @@
 """
 import csv
 import os
+import requests
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import time
 import pytz
 from pathlib import Path
+
+# 關閉公開資訊觀測站部分環境的憑證警告
+try:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except Exception:
+    pass
 
 class IRFetcher:
     """法人說明會數據獲取器（從本地CSV文件）"""
@@ -35,6 +43,12 @@ class IRFetcher:
         
         # 確保目錄存在
         self.csv_dir.mkdir(exist_ok=True)
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://mopsov.twse.com.tw/mops/web/t100sb02_1',
+            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+        })
         
     def _is_cache_valid(self, key: str) -> bool:
         """檢查緩存是否有效"""
@@ -225,6 +239,164 @@ class IRFetcher:
         if market == 'otc':
             return first_digit in {'3', '4', '5', '6', '7', '8'}
         return True
+
+    def _decode_csv_bytes(self, content: bytes) -> str:
+        """MOPS CSV 常見 Big5/CP950，依序嘗試解碼。"""
+        for encoding in ('big5hkscs', 'cp950', 'big5', 'utf-8-sig', 'utf-8'):
+            try:
+                return content.decode(encoding)
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+        return content.decode('utf-8', errors='ignore')
+
+    def _ir_csv_filename(self, month: int, market: str) -> str:
+        """自動下載檔名：N月-市.csv / N月-櫃.csv。"""
+        suffix = '市' if market == 'sii' else '櫃'
+        return f'{month}月-{suffix}.csv'
+
+    def _ir_csv_is_fresh_today(self, path: Path) -> bool:
+        """避免同一天重複打 MOPS；手動按更新會用 force 覆蓋這個檢查。"""
+        if not path.exists():
+            return False
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=self.taiwan_tz)
+        return mtime.date() == datetime.now(self.taiwan_tz).date()
+
+    def _extract_download_filename(self, html: str) -> Optional[str]:
+        """從查詢結果 HTML 抽出 MOPS 產生的暫存 CSV 檔名。"""
+        key = "name='filename' value='"
+        idx = html.find(key)
+        if idx < 0:
+            return None
+        start = idx + len(key)
+        end = html.find("'", start)
+        if end < 0:
+            return None
+        filename = html[start:end].strip()
+        return filename if filename.lower().endswith('.csv') else None
+
+    def download_ir_csv_month(self, roc_year: int, month: int, market: str, force: bool = False) -> Tuple[bool, str]:
+        """
+        下載單一月份/市場的法人說明會 CSV。
+        流程等同網頁操作：查詢月份 -> 解析暫存 CSV 檔名 -> 呼叫另存 CSV 端點。
+        """
+        if market not in ('sii', 'otc'):
+            return False, 'unsupported_market'
+
+        target = self.csv_dir / self._ir_csv_filename(month, market)
+        if not force and self._ir_csv_is_fresh_today(target):
+            return True, 'fresh'
+
+        def keep_existing_on_failure(status: str) -> Tuple[bool, str]:
+            if target.exists():
+                return True, 'existing'
+            return False, status
+
+        headers = {
+            'User-Agent': self.session.headers.get('User-Agent', 'Mozilla/5.0'),
+            'Referer': 'https://mopsov.twse.com.tw/mops/web/t100sb02_1',
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept-Language': self.session.headers.get('Accept-Language', 'zh-TW,zh;q=0.9'),
+        }
+
+        try:
+            try:
+                self.session.get('https://mopsov.twse.com.tw/mops/web/t100sb02_1', timeout=15, verify=False)
+            except Exception:
+                pass
+
+            query_data = {
+                'encodeURIComponent': '1',
+                'step': '1',
+                'firstin': '1',
+                'off': '1',
+                'TYPEK': market,
+                'year': str(roc_year),
+                'month': f'{month:02d}',
+                'co_id': '',
+            }
+            query = self.session.post(
+                'https://mopsov.twse.com.tw/mops/web/ajax_t100sb02_1',
+                data=query_data,
+                headers=headers,
+                timeout=25,
+                verify=False,
+            )
+            query.raise_for_status()
+            filename = self._extract_download_filename(query.text)
+            if not filename:
+                return keep_existing_on_failure('download_filename_not_found')
+
+            download = self.session.post(
+                'https://mopsov.twse.com.tw/server-java/t105sb02',
+                data={'step': '10', 'filename': filename},
+                headers=headers,
+                timeout=25,
+                verify=False,
+            )
+            download.raise_for_status()
+            content = download.content or b''
+        except Exception as exc:
+            return keep_existing_on_failure(f'fetch_error: {exc}')
+
+        text = self._decode_csv_bytes(content)
+        if not text or 'html' in text.lower()[:200]:
+            return keep_existing_on_failure('not_csv')
+        if '公司代號' not in text or '公司名稱' not in text:
+            return keep_existing_on_failure('unexpected_csv_format')
+
+        detected_month = self._detect_month_from_csv_content(content)
+        if detected_month is not None and detected_month != month:
+            return keep_existing_on_failure(f'month_mismatch:{detected_month}')
+
+        self.csv_dir.mkdir(exist_ok=True)
+        with open(target, 'wb') as f:
+            f.write(content)
+        self.cache.clear()
+        self.cache_time.clear()
+        return True, 'downloaded'
+
+    def ensure_current_and_next_ir_csv(self, force: bool = False) -> Dict:
+        """同步當月與下個月的上市/上櫃法說會 CSV。"""
+        now = datetime.now(self.taiwan_tz)
+        months = []
+        year = now.year
+        month = now.month
+        for i in range(2):
+            y = year
+            m = month + i
+            while m > 12:
+                m -= 12
+                y += 1
+            months.append((y - 1911, m))
+
+        summary = {
+            'downloaded': [],
+            'fresh': [],
+            'failed': [],
+        }
+        for roc_year, m in months:
+            for market in ('sii', 'otc'):
+                ok, status = self.download_ir_csv_month(roc_year, m, market, force=force)
+                item = {
+                    'roc_year': roc_year,
+                    'month': m,
+                    'market': market,
+                    'status': status,
+                }
+                if ok and status == 'downloaded':
+                    summary['downloaded'].append(item)
+                elif ok:
+                    summary['fresh'].append(item)
+                else:
+                    summary['failed'].append(item)
+                time.sleep(0.8)
+
+        summary['counts'] = {
+            'downloaded': len(summary['downloaded']),
+            'fresh': len(summary['fresh']),
+            'failed': len(summary['failed']),
+        }
+        return summary
     
     def fetch_ir_meetings(self, year: int, month: int, market: str = 'sii') -> List[Dict]:
         """
@@ -512,7 +684,7 @@ class IRFetcher:
         """
         import re
         text = None
-        for enc in ('big5', 'cp950', 'utf-8', 'utf-8-sig'):
+        for enc in ('big5hkscs', 'big5', 'cp950', 'utf-8', 'utf-8-sig'):
             try:
                 text = content.decode(enc, errors='ignore')
                 if text:
@@ -560,7 +732,7 @@ class IRFetcher:
         若無法判斷回傳 None。
         """
         text = None
-        for enc in ('big5', 'cp950', 'utf-8', 'utf-8-sig'):
+        for enc in ('big5hkscs', 'big5', 'cp950', 'utf-8', 'utf-8-sig'):
             try:
                 text = content.decode(enc, errors='ignore')
                 if text:

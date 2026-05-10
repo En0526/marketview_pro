@@ -73,7 +73,7 @@ def main():
         print("\n✅ 環境設置完成！")
         print("\n下一步:")
         print("  1. 執行: python app.py")
-        print("  2. 打開瀏覽器訪問: http://localhost:5000")
+        print("  2. 打開瀏覽器訪問: http://localhost:5001")
     else:
         print("\n請手動執行: pip install -r requirements.txt")
 

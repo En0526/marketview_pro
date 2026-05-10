@@ -4,7 +4,8 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# 以 .env 覆蓋同名環境變數（例如終端曾設過舊的 GEMINI_MODEL，避免仍去打 2.0-flash）
+load_dotenv(override=True)
 
 class Config:
     """應用配置"""
@@ -163,10 +164,20 @@ class Config:
     FINMIND_TOKEN = os.environ.get('FINMIND_TOKEN', '').strip()
     FINMIND_TOKEN_2 = os.environ.get('FINMIND_TOKEN_2', '').strip()
 
+    # AI 速覽：Google AI Studio（Developer API）金鑰，請設於 .env 的 GEMINI_API_KEY。
+    # 套件為 google-genai（requirements.txt），請 pip install -U google-genai；勿誤裝舊套件 google-generativeai。
+    # Gemini 1.5 已退役；GEMINI_MODEL 見預設與 https://ai.google.dev/gemini-api/docs/models
+    # 本路徑非 Vertex AI；Vertex 需另設 vertexai、project、region 與不同模型 resource 格式。
+    GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
+    GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash').strip()
+    OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '').strip()
+    OPENAI_BASE_URL = os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1').strip()
+    OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini').strip()
+
     # 數據更新間隔（秒）
     DATA_UPDATE_INTERVAL = 60
     
-    # 端口配置
-    PORT = int(os.environ.get('PORT', 5000))
+    # 端口配置：本機完整版預設使用 5001，避免與其他 Flask 專案的 5000 衝突
+    PORT = int(os.environ.get('PORT', 5001))
     DEBUG = os.environ.get('FLASK_ENV') == 'development'
 
